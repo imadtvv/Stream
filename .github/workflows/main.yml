@@ -1,0 +1,31 @@
+name: FB Mass Streamer
+
+on:
+  workflow_dispatch: # للتشغيل اليدوي
+  schedule:
+    - cron: '0 */6 * * *' # سيعيد التشغيل كل 6 ساعات تلقائياً
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Dependencies
+        run: npm install axios
+
+      - name: Run Mass Streamer
+        run: node stream.js
+        

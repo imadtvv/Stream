@@ -11,6 +11,7 @@ const POST_ACCESS_TOKEN = "EAAUtvuNmD54BQZBsxuuZABDiiiDyz3inKwrMRNlB8jlcGYaHdi8R
 const POST_PAGE_ID = "941509759050822";
 const POST_ID = "122112320883236761";
 
+// ===================== CHANNELS LIST =====================
 const CHANNELS = [
     { name: "beIN 1", url: "http://dhoomtv.xyz/8zpo3GsVY7/beneficial2concern/652350", img: "gdgr" },
     { name: "beIN 2", url: "http://dhoomtv.xyz/8zpo3GsVY7/beneficial2concern/652351", img: "gdgr" },
@@ -29,73 +30,86 @@ const CHANNELS = [
 if (!isMainThread) {
     const { spawn } = require("child_process");
     const { url, rtmp } = workerData;
-    // البث الفعلي باستخدام copy
-    const ffmpeg = spawn("ffmpeg", ["-re", "-i", url, "-vcodec", "copy", "-acodec", "copy", "-f", "flv", rtmp]);
+
+    // استخدام صيغة FFmpeg البسيطة (Simple Copy) لضمان السرعة وعدم الاستقلال
+    const ffmpeg = spawn("ffmpeg", [
+        "-re", 
+        "-i", url,
+        "-vcodec", "copy", 
+        "-acodec", "copy",
+        "-f", "flv",
+        rtmp
+    ]);
+
     ffmpeg.on("exit", (code) => process.exit(code || 1));
 } else {
+    let streamKeys = [];
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-    async function prepareChannel(channel) {
+    async function createLive(channel) {
         try {
-            // خطوة 1: إنشاء البث (Unpublished)
             const res = await axios.post(`https://graph.facebook.com/${GRAPH_VERSION}/${LIVE_PAGE_ID}/live_videos`, null, 
             { params: { access_token: LIVE_ACCESS_TOKEN, status: "UNPUBLISHED", title: channel.name } });
-            
-            const liveId = res.data.id;
-            const rtmpUrl = res.data.stream_url;
-
-            // خطوة 2: الانتظار 5 ثوانٍ ليتولد رابط الـ MPD (DASH)
-            console.log(`⏳ [WAIT]: Waiting 5s for ${channel.name} DASH link...`);
-            await sleep(5000);
-
-            // خطوة 3: جلب رابط الـ DASH
-            const dashRes = await axios.get(`https://graph.facebook.com/${GRAPH_VERSION}/${liveId}?fields=dash_preview_url&access_token=${LIVE_ACCESS_TOKEN}`);
-            const dashUrl = dashRes.data.dash_preview_url;
-
-            console.log(`✅ [READY]: ${channel.name} prepared.`);
-            return { ...channel, rtmp: rtmpUrl, dash: dashUrl };
-        } catch (e) {
-            console.log(`❌ [ERROR]: Failed to prepare ${channel.name}`);
-            return null;
+            console.log(`📡 [CONSOL]: Initiating ${channel.name}...`);
+            return { ...channel, ...res.data };
+        } catch (e) { 
+            console.log(`❌ [CONSOL ERROR]: ${channel.name} failed to create.`);
+            return null; 
         }
     }
 
-    async function startFlow() {
-        console.log("🚀 [STEP 1]: Starting preparation phase...");
-        
-        // جلب البيانات لجميع القنوات (واحدة تلو الأخرى لضمان جلب الروابط بدقة)
-        let preparedData = [];
-        for (let ch of CHANNELS) {
-            const data = await prepareChannel(ch);
-            if (data) preparedData.push(data);
-        }
-
-        console.log("📢 [STEP 2]: Updating Post with ALL DASH links...");
+    async function updatePost() {
         try {
-            const payload = preparedData.map(s => ({
+            const payload = streamKeys.map(s => ({
                 img: s.img,
-                name: `${s.name} ✅`,
-                url: s.dash || "Link Pending"
+                name: s.dash ? `${s.name} ✅` : `${s.name} ❌`,
+                url: s.dash || "Offline"
             }));
             await axios.post(`https://graph.facebook.com/${POST_PAGE_ID}_${POST_ID}`, null, 
             { params: { access_token: POST_ACCESS_TOKEN, message: JSON.stringify(payload) } });
-            console.log("✅ [CONSOL]: Dashboard updated.");
-        } catch (e) { console.log("❌ [CONSOL]: Update failed."); }
-
-        // خطوة 4: الانتظار دقيقة كاملة قبل الإطلاق الفعلي
-        console.log("⏳ [WAIT]: Final cooldown for 1 minute before MASS LAUNCH...");
-        await sleep(60000);
-
-        console.log("🔥 [STEP 3]: MASS LAUNCH! Starting all FFmpeg processes now...");
-        preparedData.forEach(data => {
-            new Worker(__filename, { 
-                workerData: { url: data.url, rtmp: data.rtmp } 
-            });
-        });
-
-        console.log("🕒 [SYSTEM]: All streams active. Restart cycle in 3h 55m.");
-        setTimeout(startFlow, (3 * 60 + 55) * 60 * 1000);
+            console.log("📢 [CONSOL]: Facebook Post Updated.");
+        } catch (e) { console.log("❌ [CONSOL]: Post update failed."); }
     }
 
-    startFlow();
+    async function startNewSession() {
+        streamKeys = [];
+        console.log("🚀 [CONSOL]: Starting ALL channels simultaneously NOW (Glitch Mode)...");
+        
+        // إطلاق جميع القنوات في نفس الوقت تماماً باستخدام Promise.all
+        const results = await Promise.all(CHANNELS.map(ch => createLive(ch)));
+        
+        results.forEach(res => {
+            if (res && res.stream_url) {
+                const info = { name: res.name, url: res.url, img: res.img, rtmp: res.stream_url, id: res.id, dash: null };
+                streamKeys.push(info);
+                
+                // تشغيل العامل فوراً لكل قناة بدون تأخير
+                new Worker(__filename, { workerData: info });
+            }
+        });
+
+        console.log("⏳ [CONSOL]: Success. Waiting 2 minutes for Dash links & Post update...");
+        await sleep(120000); 
+        
+        for (let s of streamKeys) {
+            try {
+                const r = await axios.get(`https://graph.facebook.com/${GRAPH_VERSION}/${s.id}?fields=dash_preview_url&access_token=${LIVE_ACCESS_TOKEN}`);
+                s.dash = r.data.dash_preview_url;
+                if (s.dash) {
+                    console.log(`✅ [CONSOL]: ${s.name} is ONLINE`);
+                } else {
+                    console.log(`❌ [CONSOL]: ${s.name} is OFFLINE (No DASH)`);
+                }
+            } catch { s.dash = null; }
+        }
+
+        await updatePost();
+
+        console.log("🕒 [CONSOL]: System running. Next full restart in 3h 55m.");
+        await sleep((3 * 60 + 55) * 60 * 1000); 
+        
+        startNewSession();
+    }
+
+    startNewSession();
 }
